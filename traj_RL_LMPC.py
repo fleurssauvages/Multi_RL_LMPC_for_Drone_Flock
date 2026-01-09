@@ -18,7 +18,7 @@ import spatialmath as sm
 '''' 
 Example of using Multi-Agent Power RL to learn reaching trajectories for multiple drones in a PyBullet environment.
 The current script initializes a circular formation of drones, sets up a reaching task with obstacles, and runs the learning algorithm.
-The Drones then execute their best learned trajectories in the simulation, with a PID controller.
+The Drones then execute their best learned trajectories in the simulation, with a LMPC (decentralized) to avoid collisions with obstacles. Inter collisions are not handled.
 '''
 
 def main():
@@ -85,7 +85,6 @@ def main():
     obstacle_ids = []
     for obs in obstacles:
         obstacle_ids.append(create_sphere_obstacle(obs["center"], obs["radius"]))
-
 
     # --- Init RL ---
     np.random.seed(1)

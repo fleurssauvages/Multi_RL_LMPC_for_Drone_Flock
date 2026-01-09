@@ -19,7 +19,7 @@ import spatialmath as sm
 '''' 
 Example of using Multi-Agent Power RL to learn reaching trajectories for multiple drones in a PyBullet environment.
 The current script initializes a circular formation of drones, sets up a reaching task with obstacles, and runs the learning algorithm.
-The Drones then execute their best learned trajectories in the simulation, with a PID controller.
+The Drones then execute their best learned trajectories in the simulation, with a LMPC (decentralized) to avoid collisions with obstacles + QP (centralized) solver to avoid inter-collisions.
 '''
 
 def main():
@@ -183,7 +183,7 @@ def main():
 
     # --- Main loop ---
     speed_limit = env.SPEED_LIMIT * 10
-    lmpc_solver = LinearMPCController(horizon=5, dt=dt_ctrl, gamma = 0.02,
+    lmpc_solver = LinearMPCController(horizon=5, dt=dt_ctrl, gamma = 0.05,
                                     u_min=np.array([-speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10]),
                                     u_max=np.array([ speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10]))
     cbf_qp_solver = MultiDroneCBFQP(num_drones=NUM_DRONES, dt=dt_ctrl)
@@ -214,7 +214,7 @@ def main():
             T_i = sm.SE3.Trans(position_i)
             T_des = sm.SE3.Trans(target)
 
-            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des, xi0=xi0, obstacles=obstacles, traj=traj, margin=0.1)
+            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des, xi0=xi0, obstacles=obstacles, traj=traj, margin=0.10)
             v_cart = Uopt[0:3]
             v_lmpc[i, :] = v_cart
         
@@ -226,10 +226,10 @@ def main():
         v_opt, slack = cbf_qp_solver.solve(
             v_nom=v_lmpc,
             positions=pos,
-            obstacles=[],
+            obstacles=obstacles,
             v_max=speed_limit*10,
-            d_obs_margin=0.15,
-            d_safe=0.15,
+            d_obs_margin=0.10,
+            d_safe=0.2,
             alpha_obs=10,
             alpha_pair=10,
             use_slack=True,
