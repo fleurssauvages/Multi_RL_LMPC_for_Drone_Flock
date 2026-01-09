@@ -85,7 +85,7 @@ pip install "numpy<=2.3"
 
 <div align="center">
 
-### 🔹 Reinforcement learning for path finding (self collision deactivated)
+### 🔹 Reinforcement learning for path finding (self collision deactivated, drones are considered as points)
 <img src="images/RL.gif" width="800" alt="RL">
 
 ### 🔹 RL and LMPC (decentralized): drones can still inter-collide, but collision with obstacles are avoided
