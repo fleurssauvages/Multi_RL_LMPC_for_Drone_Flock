@@ -15,16 +15,16 @@ This repository implements a **hierarchical control stack** for **single and mul
 
 ## 🧠 Control Architecture
 
-High-level planning, tracking, and safety are split into clear modules:
+High-level planning, tracking, and safety are split into a hierchical control:
 
 ```text
-RL + DMP Trajectory Learning for smooth Cartesian trajectories with obstacle avoidance  
+RL + DMP Trajectory Learning for smooth Cartesian trajectories with obstacle avoidance (full trajectory)
         ↓
-LMPC (Nominal Cartesian Velocity), decentralized solver to ensure the constraints over a given horizon
+LMPC (Nominal Cartesian Velocity), decentralized solver to ensure the constraints over a given horizon (part of the trajectory)
         ↓
-CBF-QP Safety Filter (Obstacles + Inter-Drone Avoidance), centralized solver on one single time-step to avoid collisions between drones
+CBF-QP Safety Filter (Obstacles + Inter-Drone Avoidance), centralized solver on one single time-step to avoid collisions between drones (single time step)
         ↓
-Low-Level PID (gym-pybullet-drones -> RPMs)
+Low-Level PID (gym-pybullet-drones Cartesian velocities -> RPMs)
         ↓
 Quadrotor Dynamics (PyBullet)
 ```
