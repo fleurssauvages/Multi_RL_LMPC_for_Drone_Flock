@@ -3,12 +3,72 @@ from scipy.spatial.transform import Rotation as R
 from qpsolvers import solve_qp
 import scipy.sparse as sp
 from scipy.linalg import block_diag
+from scipy.interpolate import CubicSpline
 
 """ ------------------------
 MPC problem assembly based from 
 Alberto, Nicolas Torres, et al. "Linear Model Predictive Control in SE (3) for online trajectory planning in dynamic workspaces." (2022).
 https://hal.science/hal-03790059/document
 ------------------------"""
+
+#------------------------
+# Helpers for constraints
+#------------------------
+
+def build_spline(p0, p1, T=1.0):
+    """
+    p0, p1: (3,) start and goal
+    Returns spline function s(t) with t in [0, T]
+    """
+    t = np.array([0.0, T])
+    p = np.vstack([p0, p1])
+    return CubicSpline(t, p, axis=0)
+
+def sample_spline(spline, horizon, dt):
+    ts = np.linspace(0, horizon*dt, horizon)
+    return np.array([spline(t) for t in ts])
+
+def corridor_planes_from_spline(
+    p_ref, obstacles, margin=0.05
+):
+    """
+    p_ref: (horizon, 3) spline samples
+    obstacles: list of {"center": (3,), "radius": float}
+    Returns A_x, b_x such that A_x X <= b_x
+    """
+    horizon = p_ref.shape[0]
+    A_x = []
+    b_x = []
+
+    for k in range(horizon):
+        p_k = p_ref[k]
+
+        for obs in obstacles:
+            c = obs["center"]
+            r = obs["radius"]
+
+            v = p_k - c
+            d = np.linalg.norm(v)
+            if d < 1e-6:
+                continue  # degenerate, skip
+
+            n = v / d # normal vector
+
+            # Build row acting on X (6*horizon)
+            row = np.zeros(6 * horizon)
+            row[6*k : 6*k+3] = -n
+
+            rhs = -(n @ c + r + margin) # - (n . c + r + margin) <= -n . x_k i.e the projection of x_k on n is at least r + margin away from center along n
+
+            A_x.append(row)
+            b_x.append(rhs)
+
+    if len(A_x) == 0:
+        return None, None
+
+    return np.vstack(A_x), np.array(b_x)
+
+
 class LinearMPCController:
     def __init__(self, horizon=10, dt=0.05, gamma=1e-3, u_min=None, u_max=None):
         self.n = 6
@@ -29,7 +89,7 @@ class LinearMPCController:
         self.solution = None
         pass
     
-    def solve(self, ini_pose, des_pose, xi0=None):
+    def solve(self, ini_pose, des_pose, xi0 = None, obstacles=None, traj=None, margin=0.05):
         """
         Solve finite-horizon linear MPC:
         minimize ||X - X_des||^2 + gamma ||U||^2
@@ -71,14 +131,17 @@ class LinearMPCController:
         # Formulation according to QP, see QP for more details
         self.H = 2 * (B_big.T @ Q_big @ B_big + self.gamma * np.eye(self.n*self.horizon))
         self.g = 2 * (B_big.T @ Q_big @ (A_big @ Xprev - Xd))
-
+        
         # Constraints on U
         if self.u_min is not None:
             self.lb = np.tile(self.u_min, self.horizon)
         if self.u_max is not None:
             self.ub = np.tile(self.u_max, self.horizon)
+        
+        # --- reset each solve (safer) ---
+        self.A = np.zeros((0, self.n*self.horizon))
+        self.b = np.zeros(0)
 
-        # Initial velocity constraint if provided
         if xi0 is not None and self.u_min is not None and self.u_max is not None:
             # U0 <= xi0 + du0 where du0 the deviation allowed from current velocity, here du0 = u_max
             # -U0 <= -(xi0 - du0)
@@ -90,12 +153,39 @@ class LinearMPCController:
             # Append to existing inequalities (self.A, self.b)
             self.A = G_add
             self.b = h_add
-            
+
+        # build spline in world
+        if obstacles is not None and traj is not None and np.linalg.norm(ini_pose[:3,3] - des_pose[:3,3]) > 0.01:
+            traj = build_spline(ini_pose[:3,3], des_pose[:3,3], T=1.0)
+            p_world = sample_spline(traj, self.horizon, self.dt)
+            # --- convert reference + obstacles to local/tangent-ish coordinates ---
+            R0 = ini_pose[:3,:3]
+            p0 = ini_pose[:3,3]
+            p_ref = (R0.T @ (p_world - p0).T).T
+
+            obstacles_local = []
+            for obs in obstacles:
+                c_local = R0.T @ (np.asarray(obs["center"]) - p0)
+                obstacles_local.append({"center": c_local, "radius": obs["radius"]})
+
+            A_x, b_x = corridor_planes_from_spline(p_ref, obstacles_local, margin=margin)
+
+            if A_x is not None:
+                G_corr = A_x @ B_big
+                h_corr = b_x - A_x @ (A_big @ Xprev)
+
+                self.A = np.vstack([self.A, G_corr])
+                self.b = np.hstack([self.b, h_corr])
+                
         # Solve QP
         Uopt = solve_qp(sp.csc_matrix(self.H), self.g, G=sp.csc_matrix(self.A), h=self.b, \
             A=sp.csc_matrix(self.eqA), b=self.eqb, lb=self.lb, ub=self.ub, solver="osqp", initvals=self.solution)
         self.solution = Uopt
         
+        if Uopt is None:
+            return None, None, None
+        
+        # Reconstruct predicted X sequence
         Xopt = (A_big @ Xprev + B_big @ Uopt).reshape(self.horizon, self.n)
         
         # Convert predicted x sequence back to poses
@@ -106,7 +196,7 @@ class LinearMPCController:
             T = T @ se3_exp(dlog @ u_i * self.dt)
             poses.append(T)
         return Uopt, Xopt, poses
-
+    
 # ------------------------
 # Example
 # ------------------------

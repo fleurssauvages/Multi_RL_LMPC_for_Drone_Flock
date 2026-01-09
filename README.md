@@ -1,17 +1,37 @@
-# 🚁 RL, DMP and LMPC-Inspired Control for Multi-Quadrotor Systems
+# 🚁 RL + DMP + LMPC + CBF-QP for Multi-Quadrotor Control
 
 [![Python](https://img.shields.io/badge/python-3.9%2B-blue.svg)](https://www.python.org/)
 [![Simulator](https://img.shields.io/badge/simulator-gym--pybullet--drones-orange)](https://github.com/utiasDSL/gym-pybullet-drones)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 
-This project demonstrates **Reinforcement Learning (RL) with Dynamic Movement Primitives (DMP)** combined with an **LMPC-inspired outer-loop controller** for **single and multi-quadrotor systems**.
+This repository implements a **hierarchical control stack** for **single and multi-quadrotor systems**:
 
-- **RL + DMP** learn smooth Cartesian trajectories with obstacle avoidance  
-- **LMPC-inspired velocity control** tracks trajectories without directly commanding positions  
-- **gym-pybullet-drones** provides quadrotor dynamics and low-level PID control in Pybullet  
-- Supports **multi-agent learning**, **trajectory diversity**, and **Low Level Control under constraints**
+- **RL + DMP** for smooth trajectory generation (multi-agent capable)
+- **LMPC** to compute **nominal Cartesian velocities** for tracking
+- **CBF-QP** safety filter to enforce **inter-drone separation**
+- **gym-pybullet-drones** for simulation, dynamics, and low-level control (RPM output)
 
 ---
+
+## 🧠 Control Architecture
+
+High-level planning, tracking, and safety are split into clear modules:
+
+```text
+RL + DMP Trajectory Learning for smooth Cartesian trajectories with obstacle avoidance  
+        ↓
+LMPC (Nominal Cartesian Velocity), decentralized solver to ensure the constraints over a given horizon
+        ↓
+CBF-QP Safety Filter (Obstacles + Inter-Drone Avoidance), centralized solver on one single time-step to avoid collisions between drones
+        ↓
+Low-Level PID (gym-pybullet-drones -> RPMs)
+        ↓
+Quadrotor Dynamics (PyBullet)
+```
+
+---
+## Acknowledgement
+
 The Reinforcement Learning formulation is based on:
 > Petar Kormushev, Sylvain Calinon and Darwin G. Caldwell  
 > ["Robot Motor Skill Coordination with EM-based Reinforcement Learning."](https://www.researchgate.net/publication/224199135_Robot_Motor_Skill_Coordination_with_EM-based_Reinforcement_Learning) (2010)
@@ -20,6 +40,10 @@ Is it implemented with numba for fast computation.
 The LMPC problem formulation is based on:  
 > Alberto, Nicolas Torres, et al.  
 > ["Linear Model Predictive Control in SE(3) for online trajectory planning in dynamic workspaces."](https://hal.science/hal-03790059/document) (2022)
+
+The CBF-QP problem is formulated from:
+> Aaron D. Ames, Samuel Coogan, Magnus Egerstedt, Gennaro Notomista, Koushil Sreenath, Paulo Tabuada  
+> ["Control Barrier Functions: Theory and Applications."](https://arxiv.org/abs/1903.11199) (2019)
 
 The gym-pybullet-drones can be found at https://utiasdsl.github.io/gym-pybullet-drones/ and is based on:
 > Jacopo Panerati and Hehui Zheng and SiQi Zhou and James Xu and Amanda Prorok and Angela P. Schoellig  
@@ -36,10 +60,12 @@ A more detailed repository for the RL formulation, using a 7 DoF robot arm can b
 
 ```
 ├── RL/                     # RL repo, see the global repo for more details
-├── MPC/                    # LMPC repo, see the global repo for more details
+├── MPC/                    # LMPC and QP solver
 ├── gym_pybullet_drones/    # forked from the named repo for simulation, needs to be donwloaded separately
 ├── drone_flock_test.py     # a simple test to check the installation
 ├── traj_RL.py              # computing and testing trajectories with multi-agents
+├── traj_RL_LMPC.py         # computing and testing trajectories with multi-agents and decentralized LMPC
+├── traj_RL_LMPC_QP.py      # RL, decentralized LMPC and centralized QP
 ├── README.md
 ```
 
@@ -59,16 +85,17 @@ pip install "numpy<=2.3"
 
 <div align="center">
 
-### 🔹 Reinforcement learning for path finding
+### 🔹 Reinforcement learning for path finding (self collision deactivated)
 <img src="images/RL.gif" width="800" alt="RL">
+
+### 🔹 RL and LMPC: drones can still inter-collide
+<img src="images/LMPC.gif" width="800" alt="RL">
+
+### 🔹 RL and LMPC and CBF-QP: drones cannot collide anymore
+<img src="images/QP.gif" width="800" alt="RL">
 
 </div>
 ---
-
-## TO DO
-Add the LMPC to compute desired cartesian velocity with constraints
-
-Add a dynamic avoidance of a moving obstacle
 
 ## 🚀 Run the Simulations
 
@@ -83,6 +110,19 @@ Add a dynamic avoidance of a moving obstacle
   python traj_RL.py
   ```
   Compute a multiagent trajectory (5 drones) avoiding a static circular obstacle.
+
+- **RL Traj for Multi-Agent with LMPC**  
+  ```bash
+  python traj_RL_LMPC.py
+  ```
+  An LMPC ensures the obstacle is avoided over a given time horizon, with a certain margin (i.e all points of the drone). The LMPC, however, being decentralized, does not avoids inter-drone collisions.
+
+- **RL Traj for Multi-Agent with LMPC and CBF QP**  
+  ```bash
+  python traj_RL_LMPC_QP.py
+  ```
+The CBF QP is centralized (single time step) and avoids inter-drones collisions while still ensuring obstacle avoidance.
+
 ---
 
 ## 📜 License
@@ -93,4 +133,5 @@ This project is licensed under the [MIT License](LICENSE).
 ## ⭐ Acknowledgments
 - Inspired by the work of Alberto, Nicolas Torres, et al. (2022).
 - Inspired by the work of Petar Kormushev, Sylvain Calinon and Darwin G. Caldwell (2010)
+- Inspired by the work of Aaron D. Ames, et al (2019)
 - Using the simulator and work of Jacopo Panerati et al (2021)

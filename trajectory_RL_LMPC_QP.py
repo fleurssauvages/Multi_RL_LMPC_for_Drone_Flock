@@ -2,7 +2,7 @@ import time
 import numpy as np
 import pybullet as p
 
-from gym_pybullet_drones.envs.CtrlAviary import CtrlAviary
+from gym_pybullet_drones.envs.VelocityAviary import VelocityAviary
 from gym_pybullet_drones.control.DSLPIDControl import DSLPIDControl
 from gym_pybullet_drones.utils.enums import DroneModel, Physics
 
@@ -11,6 +11,10 @@ from RL.env_reaching import ReachingEnv
 from RL.demo_utils import init_from_demo, make_exploration_std, set_axes_equal, make_demo_6D
 from RL.multiagent_power_rl import MultiAgentPowerRL
 from RL.resample import resample_min_jerk
+
+from MPC.LMPC_solver_obs import LinearMPCController
+from MPC.QP_solver import MultiDroneCBFQP
+import spatialmath as sm
 
 '''' 
 Example of using Multi-Agent Power RL to learn reaching trajectories for multiple drones in a PyBullet environment.
@@ -39,7 +43,7 @@ def main():
     CTRL_HZ = 200
     dt_ctrl = 1.0 / CTRL_HZ
 
-    env = CtrlAviary(
+    env = VelocityAviary(
         drone_model=DroneModel.CF2X,
         num_drones=NUM_DRONES,
         initial_xyzs=init_xyzs,
@@ -93,7 +97,7 @@ def main():
     weight_demo, weight_goal = 0.05, 0.95
     weight_jerk, weight_end_vel = 0.005, 0.05
     n_iterations, rollouts_per_agent = 120, 8
-    n_agents = 5
+    n_agents = NUM_DRONES
     exploration_std = make_exploration_std(D, K, sigma_pos=0.05, sigma_ori=0.1, sigma_kp=0.02)
     decay = 0.98
     scaling = 0.5
@@ -105,10 +109,10 @@ def main():
     dmp = init_from_demo(dmp, demo, kp_diag=80.0)
     goal = demo["x"][-1]
 
-    obstacles = [
+    obstaclesRL = [
         {'center': (centerObs - center[:3]) / scaling, 'radius': radiusObs / scaling},
     ]
-    envRL = ReachingEnv(dmp, dt=dt, obstacles=obstacles, demo_traj=demo, goal=goal)
+    envRL = ReachingEnv(dmp, dt=dt, obstacles=obstaclesRL, demo_traj=demo, goal=goal)
 
     # --- Multi-agent RL system ---
     population = MultiAgentPowerRL(
@@ -118,7 +122,7 @@ def main():
         reuse_top_n=3,
         diversity_strength=0.1 * np.mean(exploration_std)
     )
-    # --- Main loop ---
+    # --- Main loop RL ---
     for it in range(n_iterations):
         population.reset_histories()
         def rollout_job(agent_id):
@@ -149,12 +153,12 @@ def main():
         population.apply_diversity_pressure(exploration_std=exploration_std*0.1)
         population.update_exploration(exploration_std * (decay ** it))
         population.update_diversity_strength(population.diversity_strength * decay)
-
+    
     # --- Compute best traj/return per agent ---
     best_trajs_per_agent = []
     best_returns_per_agent = []
 
-    for _, agent in enumerate(population.agents):
+    for i, agent in enumerate(population.agents):
         if len(agent.history_returns) == 0:
             best_trajs_per_agent.append(None)
             best_returns_per_agent.append(-np.inf)
@@ -166,48 +170,79 @@ def main():
         best_returns_per_agent.append(history_R[best_idx_local])
 
         best_traj = envRL.simulate_numba(best_params)
+        best_traj['x'] = best_traj['x'][:, 0:3] * scaling + center[:3]
+
+        # Plot trajectory
+        for k in range(len(best_traj['x'])-1):
+            t1 = best_traj['x'][k, :3]
+            t2 = best_traj['x'][k+1, :3]
+            p.addUserDebugLine(t1, t2, [0, 1, 0], lineWidth=3)
+
         best_traj = resample_min_jerk(best_traj, N_new=int(CTRL_HZ * sim_duration), duration=sim_duration)
         best_trajs_per_agent.append(best_traj)
 
-    import matplotlib.pyplot as plt
-    fig = plt.figure(figsize=(22, 14))
-    ax_traj = fig.add_subplot(111, projection='3d')
-    cmap = plt.cm.get_cmap("nipy_spectral", n_agents)
-    for i, traj_best_local in enumerate(best_trajs_per_agent):
-        xs, ys, zs = traj_best_local['x'][:, 0], traj_best_local['x'][:, 1], traj_best_local['x'][:, 2]
-        ax_traj.plot(xs, ys, zs, color=cmap(i), linewidth=2.5, label=f"Agent {i} best (R={best_returns_per_agent[i]:.3f}")
-    for _, ob in enumerate(obstacles):
-        c, r = ob['center'], ob['radius']
-        u, v = np.mgrid[0:2*np.pi:20j, 0:np.pi:20j]
-        x = c[0] + r * np.cos(u) * np.sin(v)
-        y = c[1] + r * np.sin(u) * np.sin(v)
-        z = c[2] + r * np.cos(v)
-        ax_traj.plot_surface(x, y, z, color='red', alpha=0.25, linewidth=0)
-    set_axes_equal(ax_traj)
-    plt.xlabel("Time [s]")
-    plt.ylabel("X position [m]")
-    plt.title("Best Trajectories per Agent: Close to Simulate")
-    plt.legend()
-    plt.show()
-
     # --- Main loop ---
+    speed_limit = env.SPEED_LIMIT * 10
+    lmpc_solver = LinearMPCController(horizon=5, dt=dt_ctrl, gamma = 0.02,
+                                    u_min=np.array([-speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10]),
+                                    u_max=np.array([ speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10]))
+    cbf_qp_solver = MultiDroneCBFQP(num_drones=NUM_DRONES, dt=dt_ctrl)
+    
+    Uopt = np.zeros((6 * lmpc_solver.horizon,))
+    time.sleep(5.0)  # wait before starting main loop
     for step in range(int(sim_duration * CTRL_HZ * 2)):
+        v_lmpc = np.zeros((NUM_DRONES, 3))
+
+        # LMPC
         for i in range(NUM_DRONES):
-            # Get the full state vector for drone i (CtrlAviary provides it internally)
             state_i = env._getDroneStateVector(i)
+            position_i = state_i[0:3]
             velocity_i = state_i[10:13]
-            print(velocity_i)
+            omega_i = state_i[13:16]
+            xi0 = np.hstack((velocity_i, omega_i))
+            xi0 = np.clip(xi0, -speed_limit/2, speed_limit/2)
+
             if step < int(sim_duration * CTRL_HZ):
-                target = best_trajs_per_agent[i]["x"][step][0:3] * scaling + init_xyzs[i]
+                target = best_trajs_per_agent[i]["x"][step][0:3]
             else:
-                target = goal[0:3] * scaling + init_xyzs[i]
-            rpm_i, _, _ = ctrls[i].computeControlFromState(
-                control_timestep=dt_ctrl,
-                state=state_i,
-                target_pos=target,
-                target_rpy=np.array([0.0, 0.0, 0.0]),
-            )
-            action[i, :] = rpm_i
+                target = best_trajs_per_agent[i]["x"][-1][0:3]
+            if step < int(sim_duration * CTRL_HZ) - lmpc_solver.horizon:
+                traj = best_trajs_per_agent[i]["x"][step:step + lmpc_solver.horizon, 0:3]
+            else:
+                traj = None
+
+            T_i = sm.SE3.Trans(position_i)
+            T_des = sm.SE3.Trans(target)
+
+            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des, xi0=xi0, obstacles=obstacles, traj=traj, margin=0.1)
+            v_cart = Uopt[0:3]
+            v_lmpc[i, :] = v_cart
+        
+        # CBF-QP to adjust velocities to avoid collisions
+        states = [env._getDroneStateVector(j) for j in range(NUM_DRONES)]
+        pos = np.array([s[0:3] for s in states])
+        action = np.zeros((NUM_DRONES, 4), dtype=np.float32)
+
+        v_opt, slack = cbf_qp_solver.solve(
+            v_nom=v_lmpc,
+            positions=pos,
+            obstacles=[],
+            v_max=speed_limit*10,
+            d_obs_margin=0.15,
+            d_safe=0.15,
+            alpha_obs=10,
+            alpha_pair=10,
+            use_slack=True,
+            rho_slack=1e4,
+        )
+
+        # Set actions
+        for i in range(NUM_DRONES):
+            v_safe_i = v_opt[i, :]
+            speed = np.linalg.norm(v_safe_i)
+            direction = v_safe_i / speed if speed > 1e-3 else np.zeros(3)
+            action[i, 0:3] = direction
+            action[i, 3] = speed
 
         obs, reward, terminated, truncated, info = env.step(action)
         time.sleep(dt_ctrl)

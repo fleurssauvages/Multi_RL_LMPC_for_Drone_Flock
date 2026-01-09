@@ -1,360 +1,189 @@
 import numpy as np
-from qpsolvers import solve_qp
 import scipy.sparse as sp
-import spatialmath as sm
+from qpsolvers import solve_qp
 
-class QPController:
-    def __init__(self, robot, dt=0.05):
-        self.n_dof = robot.n
-        self.robot = robot
-        self.joint_positions = robot.q
-        self.joint_velocities = robot.qd
-        self.joints_limits = np.vstack([robot.qlim[0, :] + 0.01,   # lower limits
-                                        robot.qlim[1, :] - 0.01]) # Add some margin to joint limits
-        self.joints_velocities_limits = robot.qdlim
-        self.H = np.eye(robot.n)  # Hessian
-        self.g = np.zeros(robot.n)  # Gradient
-        self.A = np.zeros((0, robot.n))  # Inequality constraints
-        self.b = np.zeros(0)  # Inequality constraint bounds
-        self.eqA = np.zeros((0, robot.n))  # Equality constraints
-        self.eqb = np.zeros(0) # Equality constraint bounds
-        self.lb = -np.ones(robot.n) * np.inf  # Lower bounds
-        self.ub = np.ones(robot.n) * np.inf   # Upper bounds
-        self.dt = dt # Time step of the controller loop / simulation
-        self.solution = None
 
-    def solve(self, xdot, alpha=0.02, beta=0.01, W = np.diag([1.0, 1.0, 2.0, 0.1, 0.1, 0.1])):
-        """
-        Solve the quadratic programming problem using previous solution as initial value
-        Minimize the cost function ||J qdot - xdot||^2 + alpha ||N qdot||^2 - beta * manipulability_gradient * qdot
-        where N is the nullspace projector of J
-        xdot the desired end-effector velocity (6D vector)
-        alpha the weight on the secondary task (minimize joint velocities)
-        beta the weight on maximizing manipulability
-        The weight matrix W can be used to prioritize translation over rotation or vice-versa,
-        if translations are prioritize, set higher values on the first 3 diagonal elements
-        """
-        self.update_IK_problem(xdot, alpha=alpha, beta=beta, W = W)
-        self.add_floor_constraint(z_floor=0.0, margin=0.02)
-        self.update_joints_limits(self.joints_limits)
-        x = solve_qp(sp.csc_matrix(self.H), self.g, G=sp.csc_matrix(self.A), h=self.b, A=sp.csc_matrix(self.eqA), b=self.eqb, lb=self.lb, ub=self.ub, solver="osqp", initvals=self.solution)
-        self.solution = x
-        self.reset_constraints()
-        pass
-    
-    def update_robot_state(self, robot):
-        self.robot = robot
-        self.joint_positions = robot.q
-        self.joint_velocities = robot.qd
-        pass
-    
-    def update_IK_problem(self, xdot, alpha=0.02, beta=0.01, W=np.eye(6), damping=1e-6):
-        """
-        Update the IK problem parameters based on desired end-effector velocity (6D vector) and current joint positions
-        xdot: np.array of shape (6,)
-        joint_pos: np.array of shape (n_dof,)
-        The cost-function solved is ||J qdot - xdot||^2 + alpha ||N qdot||^2
-        Nullspace solved with secondary task of minimizing joint velocities and keeping elbow at 0 position (gain alpha)
-        And maximizing manipulability (gain beta)
-        The weight matrix W can be used to prioritize translation over rotation or vice-versa
-        """
-        def weighted_damped_pinv(J, W, damping=1e-6):
-            # Solve min || W (J dq - xdot) ||^2  => dq = (J^T W^T W J + damping I)^{-1} J^T W^T W xdot
-            JT_WTW_J = J.T @ (W.T @ W) @ J
-            inv = np.linalg.inv(JT_WTW_J + damping * np.eye(J.shape[1]))
-            J_pinv_w = inv @ J.T @ (W.T @ W)
-            return J_pinv_w
+class MultiDroneCBFQP:
+    """
+    Multi-drone CBF-QP safety filter.
 
-        I = np.eye(self.n_dof)
-        J = self.robot.jacobe(self.joint_positions)
-        Jpinv = weighted_damped_pinv(J, W, damping=damping) # Damped pseudo-inverse of J with weight W, damping to avoid singularities
-        
-        N = I - Jpinv @ J
-        qdot_des = np.zeros(self.n_dof)
-        qdot_des[1] = -self.joint_positions[1] / self.dt # Secondary task to keep elbow at 0 position
-        
-        def manipulability_index(q):
-            J = self.robot.jacobe(q)
-            return np.sqrt(np.linalg.det(J @ J.T))
+    Decision variables:
+        v = [v0x,v0y,v0z, v1x,v1y,v1z, ...]  in R^(3N)
+    Optionally augmented with slacks s >= 0 for each inequality constraint.
 
-        def manipulability_gradient(q, delta=1e-1):
-            w0 = manipulability_index(q)
-            grad = np.zeros_like(q)
-            for i in range(len(q)):
-                dq = np.zeros_like(q)
-                dq[i] = delta
-                Jqdq = self.robot.jacobe(q + dq)
-                w1 = manipulability_index(Jqdq)
-                grad[i] = (w1 - w0) / delta
-            return grad
-        
-        self.g = -2 * xdot.T @ (W.T @ W) @ J - 2 * qdot_des.T @ (N.T @ N) * alpha - 2 * manipulability_gradient(self.joint_positions).T @ (N.T @ N) * beta
-        self.H = 2 * (N.T @ N * alpha + J.T @ (W.T @ W) @ J)
-        pass
-        
-    def add_constraint(self, A, b):
-        """
-        Add position constraints to the QP problem
-        A: np.array of shape (m, n_dof)
-        b: np.array of shape (m,)
-        """
-        self.A = np.vstack((self.A, A))
-        self.b = np.hstack((self.b, b))
-        pass
-    
-    def reset_constraints(self):
-        """
-        Reset all position constraints
-        """
-        self.A = np.zeros((0, self.n_dof))
-        self.b = np.zeros(0)
-        pass
-    
-    def update_joints_limits(self, limits):
-        """
-        Add joint limits constraints to the QP problem
-        limits: np.array of shape (2, n_dof) with min and max limits for each joint
-        The joint limits are converted to velocity limits based on current position and dt
-        """
-        self.lb = 0.1*(limits[0, :] - self.joint_positions) / self.dt
-        self.ub = 0.1*(limits[1, :] - self.joint_positions) / self.dt
-        self.lb = np.maximum(self.lb, -self.joints_velocities_limits[0:self.n_dof])
-        self.ub = np.minimum(self.ub, self.joints_velocities_limits[0:self.n_dof])
-        pass
-    
-    def add_floor_constraint(self, z_floor=0.0, margin=0.02):
-        """ Add a constraint to avoid the end-effector going below z_floor + margin in the next time step """
-        z = self.robot.fkine(self.joint_positions).t[2]
-        
-        J = self.robot.jacobe(self.joint_positions)  # expected shape (6, n)
-        Jz = np.atleast_2d(np.asarray(J[2, :], dtype=float))  # shape (1, n)
+    Objective:
+        minimize sum_i ||v_i - v_nom_i||^2  + rho_slack * ||s||^2 (if enabled)
 
-        required = (z_floor + margin - z) / float(self.dt)  # scalar
+    Constraints:
+        - box constraints on velocity components: -v_max <= v <= v_max
+        - obstacle CBF: for each drone i and obstacle o (sphere):
+            h = ||p_i - c||^2 - (r + margin)^2
+            2(p_i-c)^T v_i + alpha*h >= 0
+        - inter-drone CBF: for each pair (i,j):
+            h = ||p_i - p_j||^2 - d_safe^2
+            2(p_i-p_j)^T (v_i - v_j) + alpha*h >= 0
+    """
 
-        G = Jz
-        h = np.array([-required], dtype=float)
+    def __init__(self, num_drones: int, dt: float):
+        self.N = int(num_drones)
+        self.dt = float(dt)
+        self.nv = 3 * self.N  # stacked translational velocities
+        self._last_solution = None
 
-        self.add_constraint(G, h)
-        pass
-
-    def add_local_tangent_plane_constraints(self, obstacles, margin = 0.05):
-        """
-        For each spherical obstacle, create a local tangent plane toward each
-        considered point/joint and add a constraint preventing that joint from crossing the plane.
-        A similar technique can be found in
-        A Quadratic Programming Approach to Manipulation in Real-Time Using Modular Robots, Chao Liu and Mark Yim, 2021
-
-        Parameters
-        ----------
-        obstacles : list of dict
-            [{'center': np.array(3), 'radius': float}, ...]
-        """
-        
-        def skew(v):
-            return np.array([
-                [0, -v[2],  v[1]],
-                [v[2], 0,  -v[0]],
-                [-v[1], v[0],  0]
-            ])
-        
-        franka_contact_points = [
-            # --- fingertips when gripper closed ---
-            np.array([0.00, 0.00, 0.0]),   # center tips
-            np.array([0.00, 0.00, -0.06]), # center palm
-
-            # # # --- palm corners (front face, outer square) ---
-            np.array([+0.0, -0.12, -0.08]), # top-right
-            np.array([+0.0, 0.12, -0.08]), # top-left
-            np.array([+0.0, -0.12, -0.04]), # bottom-right
-            np.array([+0.0, 0.12, -0.04]), # bottom-left
-        ]
-        
+    @staticmethod
+    def _as_obstacles_list(obstacles):
+        """Normalize obstacle input to list of dicts with keys center,radius."""
+        if obstacles is None:
+            return []
+        out = []
         for obs in obstacles:
-            sphere_center = np.array(obs['center'], dtype=float)
-            sphere_radius = float(obs['radius']) + abs(margin)
-                        
-            T_ee = self.robot.fkine(self.joint_positions)
-            R_ee, p_ee = T_ee.R, T_ee.t
-            J = self.robot.jacob0(self.joint_positions)
-            Jv = J[0:3, :]     # linear part
-            Jw = J[3:6, :]     # angular part
-            
-            for p_local in franka_contact_points:
-                # Global position of the contact point
-                p_world = p_ee + R_ee @ p_local
+            c = np.asarray(obs["center"], dtype=float).reshape(3)
+            r = float(obs["radius"])
+            out.append({"center": c, "radius": r})
+        return out
 
-                # Spatial Jacobian at this point: Jp = Jv + ω×r
-                # The linear velocity part for an offset point is:
-                # v_p = v + ω × r  => Jv_p = Jv + [ω]× * Jw = Jv - skew(r) * Jw
+    def solve(
+        self,
+        v_nom,
+        positions,
+        obstacles,
+        v_max,
+        d_obs_margin=0.10,
+        d_safe=0.30,
+        alpha_obs=2.0,
+        alpha_pair=2.0,
+        use_slack=True,
+        rho_slack=1e4,
+        solver="osqp",
+    ):
+        """
+        Parameters (match your desired call):
+            v_nom:      (N,3) nominal velocities (m/s), world frame
+            positions:  (N,3) current positions (m), world frame
+            obstacles:  list of {'center': (3,), 'radius': float} in world frame
+            v_max:      scalar speed bound per component (m/s) (box constraints)
+            d_obs_margin: inflate obstacle radius by this margin (m)
+            d_safe:     min inter-drone separation distance (m)
+            alpha_obs:  CBF gain for obstacle constraints
+            alpha_pair: CBF gain for inter-drone constraints
+            use_slack:  add slacks to guarantee feasibility
+            rho_slack:  slack penalty (bigger => fewer violations)
+        Returns:
+            v_opt: (N,3)
+            slack: (m,) if use_slack else None
+        """
+        # ---- sanitize inputs ----
+        v_nom = np.asarray(v_nom, dtype=float).reshape(self.N, 3)
+        pos = np.asarray(positions, dtype=float).reshape(self.N, 3)
+        obstacles = self._as_obstacles_list(obstacles)
 
-                r = p_world - p_ee
-                Jp = Jv - skew(r) @ Jw
+        v_max = float(v_max)
+        d_obs_margin = float(d_obs_margin)
+        d_safe = float(d_safe)
+        alpha_obs = float(alpha_obs)
+        alpha_pair = float(alpha_pair)
+        rho_slack = float(rho_slack)
 
-                # Direction vector from point to obstacle center
-                vec = sphere_center - p_world
-                dist = np.linalg.norm(vec)
-                if dist < 1e-9:
-                    s = np.array([1.0, 0.0, 0.0])
-                else:
-                    s = vec / dist
-                    
-                # Tangent plane: obstacle surface offset
-                o_prime = sphere_center - sphere_radius * s
+        # ---- build base QP: min ||v - v_nom||^2 ----
+        # 0.5 v^T H v + f^T v  with H = 2I, f = -2 v_nom
+        H = 2.0 * np.eye(self.nv)
+        f = -2.0 * v_nom.reshape(-1)
 
-                # Linear constraint: (s.T * Jp) * qdot <= ||o' - p|| / dt
-                A_row = s.T @ Jp  # shape (n_dof,)
-                b_scalar = np.linalg.norm(o_prime - p_world) / (self.dt * 2)
+        # ---- inequality constraints G v <= h ----
+        G_rows = []
+        h_rows = []
 
-                self.add_constraint(A_row, b_scalar)
-                
-    def add_local_tangent_plane_constraints(self, obstacles, margin=0.05,
-                                    gap_threshold=0.03,
-                                    max_constraints_per_obstacle=40,
-                                    qdot_max_scalar=1.0,
-                                    vmin_threshold=1e-3):
+        if alpha_obs > 0.0:
+            # (A) Obstacle CBF constraints (one per drone per obstacle)
+            # 2(p-c)^T v_i + alpha*h >= 0
+            # => -2(p-c)^T v_i <= alpha*h
+            for i in range(self.N):
+                p_i = pos[i]
+                for obs in obstacles:
+                    c = obs["center"]
+                    r = obs["radius"] + d_obs_margin
+                    d = p_i - c
+                    h_val = float(d @ d - r * r)
 
-        def skew_batch(r):
-            # r: (N,3)
-            # return: (N,3,3)
-            S = np.zeros((r.shape[0], 3, 3))
-            S[:,0,1] = -r[:,2]
-            S[:,0,2] =  r[:,1]
-            S[:,1,0] =  r[:,2]
-            S[:,1,2] = -r[:,0]
-            S[:,2,0] = -r[:,1]
-            S[:,2,1] =  r[:,0]
-            return S
+                    a = -2.0 * d  # row so that a^T v_i <= alpha*h
+                    b = alpha_obs * h_val
 
-        # ==============================
-        #  CONTACT GRID
-        # ==============================
-        palm_y_min  = -0.12
-        palm_y_max  =  0.12
-        palm_z_min  = -0.08
-        palm_z_max  = -0.04
-        palm_res    = 20
+                    row = np.zeros(self.nv)
+                    row[3 * i : 3 * i + 3] = a
+                    G_rows.append(row)
+                    h_rows.append(b)
 
-        fingertip_z = 0.0
-        fingertip_res = 20
+        if alpha_pair > 0.0:
+            # (B) Inter-drone CBF constraints (one per pair)
+            # 2(p_i-p_j)^T (v_i - v_j) + alpha*h >= 0
+            # => (-2d^T) v_i + (2d^T) v_j <= alpha*h
+            for i in range(self.N):
+                for j in range(i + 1, self.N):
+                    d = pos[i] - pos[j]
+                    h_val = float(d @ d - d_safe * d_safe)
 
-        finger_width  = 0.02
-        finger_height = 0.03
-        inner_offset  = 0.015
+                    row = np.zeros(self.nv)
+                    row[3 * i : 3 * i + 3] = -2.0 * d
+                    row[3 * j : 3 * j + 3] = +2.0 * d
+                    G_rows.append(row)
+                    h_rows.append(alpha_pair * h_val)
 
-        ys = np.linspace(palm_y_min, palm_y_max, palm_res)
-        zs = np.linspace(palm_z_min, palm_z_max, palm_res)
-        palm = np.array([[0.0, y, z] for y in ys for z in zs])
+        if len(G_rows) == 0:
+            # No constraints: just clip components
+            v_opt = np.clip(v_nom, -v_max, v_max)
+            return v_opt, None
 
-        yf = np.linspace(-finger_width/2, finger_width/2, fingertip_res)
-        zf = np.linspace(-finger_height/2, finger_height/2, fingertip_res)
-        tip  = np.array([[0.0, y, fingertip_z + z] for y in yf for z in zf])
+        G = np.vstack(G_rows)
+        h = np.asarray(h_rows, dtype=float)
 
-        edge_zs = np.linspace(-finger_height/2, finger_height/2, fingertip_res)
-        edges = np.array(
-            [[0.0,  finger_width/2, z] for z in edge_zs] +
-            [[0.0, -finger_width/2, z] for z in edge_zs]
-        )
+        # ---- box bounds on v ----
+        lb = -v_max * np.ones(self.nv)
+        ub = +v_max * np.ones(self.nv)
 
-        inner = np.array(
-            [[0.0, +inner_offset, fingertip_z + z] for z in zf] +
-            [[0.0, -inner_offset, fingertip_z + z] for z in zf]
-        )
-
-        franka_local = np.vstack((palm, tip, edges, inner))  # (N,3)
-        N = franka_local.shape[0]
-
-        # ------------------------------------
-        # FK & JACOBIAN ONCE
-        # ------------------------------------
-        T_ee = self.robot.fkine(self.joint_positions)
-        R_ee, p_ee = T_ee.R, T_ee.t
-        J = self.robot.jacob0(self.joint_positions)
-        Jv = J[0:3, :]
-        Jw = J[3:6, :]
-
-        # World positions of all contact points
-        p_world = p_ee + (R_ee @ franka_local.T).T   # (N,3)
-
-        # offset from tool frame origin
-        r = p_world - p_ee                           # (N,3)
-
-        # skew batch and Jacobians at points
-        S = skew_batch(r)                            # (N,3,3)
-        Jp = Jv[None,:,:] - np.einsum('nij,jk->nik', S, Jw)   # (N,3,n_dof)
-
-        # ------------------------------------
-        # LOOP OVER OBSTACLES, BUT THIN CONSTRAINTS
-        # ------------------------------------
-        for obs in obstacles:
-            sphere_center = np.asarray(obs['center'], float)
-            sphere_radius = float(obs['radius']) + abs(margin)
-
-            # vector from point to sphere
-            vec = sphere_center[None,:] - p_world         # (N,3)
-            dist = np.linalg.norm(vec, axis=1)            # (N,)
-
-            # points too far from sphere: ignore early
-            # (gap is distance from sphere surface)
-            gap = dist - sphere_radius                    # (N,)
-            near_mask = gap < gap_threshold
-            if not np.any(near_mask):
-                continue
-
-            vec_near = vec[near_mask]
-            dist_near = dist[near_mask]
-            gap_near  = gap[near_mask]
-
-            # unit normal s for near points
-            s_near = vec_near / dist_near[:,None]         # (N_near,3)
-
-            # tangent plane point
-            o_prime_near = sphere_center - sphere_radius * s_near
-
-            # plane distance (like before)
-            d_plane_near = np.linalg.norm(
-                o_prime_near - p_world[near_mask],
-                axis=1
+        # ---- solve ----
+        if not use_slack:
+            v = solve_qp(
+                sp.csc_matrix(H), f,
+                G=sp.csc_matrix(G), h=h,
+                lb=lb, ub=ub,
+                solver=solver,
+                initvals=self._last_solution,
             )
+            if v is None:
+                # fallback: stop
+                return np.zeros((self.N, 3)), None
+            self._last_solution = v
+            return v.reshape(self.N, 3), None
 
-            # A_i = s_i^T * Jp_i
-            Jp_near = Jp[near_mask]                      # (N_near,3,n_dof)
-            A_near = np.einsum("ni,nij->nj", s_near, Jp_near)  # (N_near,n_dof)
+        # ---- slack augmentation: z = [v; s],  s >= 0 ----
+        m = G.shape[0]
+        nZ = self.nv + m
 
-            # conservative max normal velocity assuming |qdot_j| <= qdot_max_scalar
-            # (if you have per-joint limits, replace scalar by vector and use dot)
-            v_max_near = np.sum(np.abs(A_near), axis=1) * qdot_max_scalar  # (N_near,)
+        H_aug = np.zeros((nZ, nZ))
+        H_aug[: self.nv, : self.nv] = H
+        H_aug[self.nv :, self.nv :] = 2.0 * rho_slack * np.eye(m)
 
-            # points that can actually move into the obstacle this step
-            # require gap <= v_max * dt + small buffer
-            can_hit_mask = gap_near <= (v_max_near * self.dt + 1e-4)
+        f_aug = np.zeros(nZ)
+        f_aug[: self.nv] = f
 
-            if not np.any(can_hit_mask):
-                continue
+        # [G  -I] [v; s] <= h
+        G_aug = np.zeros((m, nZ))
+        G_aug[:, : self.nv] = G
+        G_aug[:, self.nv :] = -np.eye(m)
 
-            idx = np.where(near_mask)[0][can_hit_mask]  # indices in original [0..N)
+        lb_aug = np.hstack([lb, np.zeros(m)])
+        ub_aug = np.hstack([ub, np.inf * np.ones(m)])
 
-            # If still too many, keep only the most dangerous ones: smallest gap
-            if idx.size > max_constraints_per_obstacle:
-                # sort by gap ascending
-                order = np.argsort(gap[idx])
-                idx = idx[order[:max_constraints_per_obstacle]]
+        z = solve_qp(
+            sp.csc_matrix(H_aug), f_aug,
+            G=sp.csc_matrix(G_aug), h=h,
+            lb=lb_aug, ub=ub_aug,
+            solver=solver,
+            initvals=None,
+        )
+        if z is None:
+            return np.zeros((self.N, 3)), None
 
-            # final rows
-            for i in idx:
-                # recompute s and A row for that i (or reuse sliced arrays)
-                v = sphere_center - p_world[i]
-                d = np.linalg.norm(v)
-                if d < 1e-9:
-                    s = np.array([1.0, 0.0, 0.0])
-                else:
-                    s = v / d
-
-                # tangent plane anchor
-                o_prime = sphere_center - sphere_radius * s
-
-                # Jacobian at point i
-                Ji = Jp[i]  # (3,n_dof)
-                A_row = s @ Ji
-                b_scalar = np.linalg.norm(o_prime - p_world[i]) / (self.dt * 2)
-
-                self.add_constraint(A_row, b_scalar)
+        v_opt = z[: self.nv].reshape(self.N, 3)
+        slack = z[self.nv :]
+        return v_opt, slack
