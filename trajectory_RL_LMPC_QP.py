@@ -189,7 +189,7 @@ def main():
     cbf_qp_solver = MultiDroneCBFQP(num_drones=NUM_DRONES, dt=dt_ctrl)
     
     Uopt = np.zeros((6 * lmpc_solver.horizon,))
-    time.sleep(5.0)  # wait before starting main loop
+
     for step in range(int(sim_duration * CTRL_HZ * 2)):
         v_lmpc = np.zeros((NUM_DRONES, 3))
 
