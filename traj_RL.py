@@ -83,7 +83,6 @@ def main():
     for obs in obstacles:
         obstacle_ids.append(create_sphere_obstacle(obs["center"], obs["radius"]))
 
-
     # --- Init RL ---
     np.random.seed(1)
 
@@ -93,7 +92,7 @@ def main():
     weight_demo, weight_goal = 0.05, 0.95
     weight_jerk, weight_end_vel = 0.005, 0.05
     n_iterations, rollouts_per_agent = 120, 8
-    n_agents = 5
+    n_agents = NUM_DRONES
     exploration_std = make_exploration_std(D, K, sigma_pos=0.05, sigma_ori=0.1, sigma_kp=0.02)
     decay = 0.98
     scaling = 0.5
@@ -118,6 +117,7 @@ def main():
         reuse_top_n=3,
         diversity_strength=0.1 * np.mean(exploration_std)
     )
+
     # --- Main loop ---
     for it in range(n_iterations):
         population.reset_histories()
@@ -168,7 +168,7 @@ def main():
         best_traj = envRL.simulate_numba(best_params)
         best_traj = resample_min_jerk(best_traj, N_new=int(CTRL_HZ * sim_duration), duration=sim_duration)
         best_trajs_per_agent.append(best_traj)
-
+    
     import matplotlib.pyplot as plt
     fig = plt.figure(figsize=(22, 14))
     ax_traj = fig.add_subplot(111, projection='3d')
@@ -196,7 +196,6 @@ def main():
             # Get the full state vector for drone i (CtrlAviary provides it internally)
             state_i = env._getDroneStateVector(i)
             velocity_i = state_i[10:13]
-            print(velocity_i)
             if step < int(sim_duration * CTRL_HZ):
                 target = best_trajs_per_agent[i]["x"][step][0:3] * scaling + init_xyzs[i]
             else:

@@ -23,10 +23,10 @@ The Drones then execute their best learned trajectories in the simulation, with 
 
 def main():
     # --- Init Drones and Drone Env ---
-    NUM_DRONES = 2
+    NUM_DRONES = 1
     r = 0.2      # circle radius (meters)
-    center = np.array([0.0, 0.0, 0.5, 0.0, 0.0, 0.0]) # circle center
-    goal = np.array([0.0, 2.0, 0.5, 0.0, 0.0, 0.0])   # reaching goal
+    center = np.array([0.0, 0.0, 1.0, 0.0, 0.0, 0.0]) # circle center
+    goal = np.array([0.0, 2.0, 1.0, 0.0, 0.0, 0.0])   # reaching goal
 
     angles = np.linspace(0, 2*np.pi, NUM_DRONES, endpoint=False)
 
@@ -91,7 +91,7 @@ def main():
 
     # --- Parameters ---
     D, K = 6, 4
-    duration, dt = 1.0, 0.02
+    duration, dt = 1.0, 0.05
     weight_demo, weight_goal = 0.05, 0.95
     weight_jerk, weight_end_vel = 0.005, 0.05
     n_iterations, rollouts_per_agent = 120, 8
@@ -154,18 +154,15 @@ def main():
     
     # --- Compute best traj/return per agent ---
     best_trajs_per_agent = []
-    best_returns_per_agent = []
 
     for i, agent in enumerate(population.agents):
         if len(agent.history_returns) == 0:
             best_trajs_per_agent.append(None)
-            best_returns_per_agent.append(-np.inf)
             continue
 
         history_R = np.array(agent.history_returns)
         best_idx_local = np.argmax(history_R)
         best_params = agent.history_params[best_idx_local]
-        best_returns_per_agent.append(history_R[best_idx_local])
 
         best_traj = envRL.simulate_numba(best_params)
         best_traj['x'] = best_traj['x'][:, 0:3] * scaling + center[:3]
@@ -181,7 +178,7 @@ def main():
 
     # --- Main loop ---
     speed_limit = env.SPEED_LIMIT * 10
-    lmpc_solver = LinearMPCController(horizon=10, dt=dt_ctrl, gamma = 0.02,
+    lmpc_solver = LinearMPCController(horizon=10, dt=dt_ctrl, gamma = 0.05,
                                     u_min=np.array([-speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10, -speed_limit*10]),
                                     u_max=np.array([ speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10,  speed_limit*10]))
     
@@ -208,7 +205,7 @@ def main():
             T_i = sm.SE3.Trans(position_i)
             T_des = sm.SE3.Trans(target)
 
-            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des, xi0=xi0, obstacles=obstacles, traj=traj, margin=0.2)
+            Uopt, Xopt, poses = lmpc_solver.solve(T_i, T_des, xi0=xi0, obstacles=obstacles, traj=traj, margin=0.1)
             v_cart = Uopt[0:3]
             speed = np.linalg.norm(v_cart)
             direction = v_cart / speed if speed > 1e-3 else np.zeros(3)

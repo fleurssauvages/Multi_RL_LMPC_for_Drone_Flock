@@ -227,7 +227,7 @@ def main():
             v_nom=v_lmpc,
             positions=pos,
             obstacles=obstacles,
-            v_max=speed_limit*10,
+            v_max=speed_limit*5,
             d_obs_margin=0.10,
             d_safe=0.2,
             alpha_obs=10,
