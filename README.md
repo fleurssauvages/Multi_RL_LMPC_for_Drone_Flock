@@ -85,10 +85,13 @@ pip install "numpy<=2.3"
 
 <div align="center">
 
-### 🔹 Reinforcement learning for path finding: drones being considered as points, trajectories are not fully safe (obstacles, inter-collisions)
+### 🔹Reinforcement learning for path finding
+<img src="images/traj.png" width="600" alt="traj">
+
+### 🔹 RL and position-PID: drones being considered as points, trajectories are not fully safe (obstacles, inter-collisions)
 <img src="images/RL.gif" width="800" alt="RL">
 
-### 🔹 RL and LMPC (decentralized): drones can still inter-collide, but collision with obstacles are avoided
+### 🔹 RL and LMPC (decentralized): collision with obstacles are avoided but drones can still inter-collide
 <img src="images/LMPC.gif" width="800" alt="RL">
 
 ### 🔹 RL and LMPC (decentralized) and CBF-QP (centralized): drones cannot inter-collide anymore

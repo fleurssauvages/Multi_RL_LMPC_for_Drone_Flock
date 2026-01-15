@@ -150,8 +150,6 @@ def main(plotTraj = False):
             z = c[2] + r * np.cos(v)
             ax_traj.plot_surface(x, y, z, color='red', alpha=0.25, linewidth=0)
         
-        xs, ys, zs = goal[0], goal[1], goal[2]
-        ax_traj.scatter(xs, ys, zs, color='green', s=100, label='Goal')
         for i in range(NUM_DRONES):
             xs, ys, zs = init_xyzs[i, 0], init_xyzs[i, 1], init_xyzs[i, 2]
             ax_traj.scatter(xs, ys, zs, color=cmap(i), s=100)
@@ -160,6 +158,16 @@ def main(plotTraj = False):
         plt.ylabel("X position [m]")
         plt.title("Best Trajectories per Agent: Close to Simulate")
         plt.legend()
+
+        ax_traj.view_init(
+            elev=50,   # cameraPitch
+            azim=-25     # cameraYaw
+        )
+        span = 1.5     # similar to cameraDistance
+        ax_traj.set_xlim(centerObs[0] - span, centerObs[0] + span)
+        ax_traj.set_ylim(centerObs[1] - span, centerObs[1] + span)
+        ax_traj.set_zlim(centerObs[2] - span, centerObs[2] + span)
+
         plt.show()
 
     # Drone Env
