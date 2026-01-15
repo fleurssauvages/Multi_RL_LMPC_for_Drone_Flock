@@ -9,7 +9,7 @@ This repository implements a **hierarchical control stack** for **single and mul
 - **RL + DMP** for smooth trajectory generation (multi-agent capable)
 - **LMPC** to compute **nominal Cartesian velocities** for tracking
 - **CBF-QP** safety filter to enforce **inter-drone separation**
-- **gym-pybullet-drones** for simulation, dynamics, and low-level control (RPM output)
+- **gym-pybullet-drones** for simulation, dynamics, and low-level control
 
 ---
 
@@ -61,7 +61,7 @@ A more detailed repository for the RL formulation, using a 7 DoF robot arm can b
 ```
 ├── RL/                     # RL repo, see the global repo for more details
 ├── MPC/                    # LMPC and QP solver
-├── gym_pybullet_drones/    # forked from the named repo for simulation, needs to be donwloaded separately
+├── gym_pybullet_drones/    # forked from the named repo for simulation, needs to be installed separately
 ├── drone_flock_test.py     # a simple test to check the installation
 ├── traj_RL.py              # computing and testing trajectories with multi-agents
 ├── traj_RL_LMPC.py         # computing and testing trajectories with multi-agents and decentralized LMPC
