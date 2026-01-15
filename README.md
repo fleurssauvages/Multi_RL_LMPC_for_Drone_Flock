@@ -121,7 +121,7 @@ pip install "numpy<=2.3"
   ```bash
   python traj_RL_LMPC_QP.py
   ```
-The CBF QP is centralized (single time step) and avoids inter-drones collisions while still ensuring obstacle avoidance.
+  The CBF QP is centralized (single time step) and avoids inter-drones collisions while still ensuring obstacle avoidance.
 
 ---
 
