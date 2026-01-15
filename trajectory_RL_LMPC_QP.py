@@ -219,7 +219,7 @@ def main(plotTraj = False):
     for obs in obstacles:
         obstacle_ids.append(create_sphere_obstacle(obs["center"], obs["radius"]))
 
-    time.sleep(1.0)  # wait for a bit
+    time.sleep(5.0)  # wait for a bit
     # --- Main loop ---
     speed_limit = 5.0 # max LMPC speed
     n = 3
