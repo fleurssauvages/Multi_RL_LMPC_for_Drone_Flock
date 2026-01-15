@@ -219,7 +219,8 @@ class ReachingEnv:
                                    start_x=None,
                                    start_xdot=None,
                                    w_demo=0.5, w_goal=0.5,
-                                   w_jerk=0.005, w_end_vel=0.01):
+                                   w_jerk=0.005, w_end_vel=0.01,
+                                   w_collision=5.0, max_distance_penalty=0.2):
 
         self.dmp.set_flat_params(params)
         D = self.dmp.D
@@ -253,7 +254,8 @@ class ReachingEnv:
             x0, v0, T,
             obs_centers, obs_radii,
             demo_arr, self.goal,
-            w_demo, w_goal, w_jerk, w_end_vel
+            w_demo, w_goal, w_jerk, w_end_vel, 
+            w_collision, max_distance_penalty
         )
 
         return traj, float(R_total)
@@ -462,7 +464,8 @@ def rollout_and_return_numba(Kp, X, centers, sigmas, V, duration, dt,
                              start_x, start_xdot, timesteps,
                              obs_centers, obs_radii,
                              demo_resampled, goal,
-                             w_demo, w_goal, w_jerk, w_end_vel):
+                             w_demo, w_goal, w_jerk, w_end_vel, w_collision,
+                             max_distance_penalty):
     """
     Fused version: integrates dynamics AND accumulates reward in one pass.
 
@@ -633,9 +636,9 @@ def rollout_and_return_numba(Kp, X, centers, sigmas, V, duration, dt,
     # --- Collision penalty (same as rollout_return_numba) ---
     if has_obs and min_d < 0.0:
         depth = -min_d
-        if depth > 0.2:
-            depth = 0.2
-        R_total -= 5.0 * depth
+        if depth > max_distance_penalty:
+            depth = max_distance_penalty
+        R_total -= w_collision * depth
 
     # --- Jerk penalty (same normalization as numba version) ---
     if timesteps > 1 and have_prev_acc:
