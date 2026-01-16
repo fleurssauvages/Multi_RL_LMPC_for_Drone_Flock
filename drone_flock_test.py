@@ -18,8 +18,7 @@ def main():
     ])
     init_rpys = np.zeros((NUM_DRONES, 3))
 
-    # Simulation/control rates (common choice: sim 240 Hz, control 48 Hz -> 5 sim steps per control step)
-    CTRL_HZ = 48
+    CTRL_HZ = 200
     dt_ctrl = 1.0 / CTRL_HZ
 
     env = CtrlAviary(

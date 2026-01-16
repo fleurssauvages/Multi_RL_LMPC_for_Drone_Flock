@@ -51,7 +51,7 @@ def main(plotTraj = False):
     CTRL_HZ = 200
     dt_ctrl = 1.0 / CTRL_HZ
     sim_duration = 6.0 # seconds
-    traj_duration = 3.0 # seconds
+    traj_duration = 1.5 # seconds
 
     # --- Init RL ---
     np.random.seed(1)
@@ -60,9 +60,9 @@ def main(plotTraj = False):
     D, K = 6, 4
     duration, dt = 1.0, 0.05 # DMP duration and timestep, later resampled to CTRL_HZ and desired traj duration, but kept small for faster simulation
     weight_demo, weight_goal = 0.05, 0.95
-    weight_jerk, weight_end_vel = 0.10 * dt * dt, 0.8 * dt
+    weight_jerk, weight_end_vel = 0.08 * dt * dt, 0.8 * dt
     weight_collision, max_distance_penalty = 5.0, radiusObs*2
-    n_iterations, rollouts_per_agent = 120, 8
+    n_iterations, rollouts_per_agent = 1200, 8
     n_agents = NUM_DRONES
     goal_start_dist = np.linalg.norm(goal[:3] - center[:3])
     exploration_std = make_exploration_std(D, K, sigma_pos= goal_start_dist, sigma_ori=0.0, sigma_kp=0.05 * goal_start_dist)
